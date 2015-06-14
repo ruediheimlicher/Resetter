@@ -75,6 +75,8 @@ void slaveinit(void)
    TWI_DDR &= ~(1<<WEBSERVERPIN);        // Eingang: Verbunden mit Webserver, empfŠngt Signal zum reset
    TWI_PORT |= (1<<WEBSERVERPIN);        // HI
 
+   
+   
    //TWI_DDR &= ~(1<<VCCPIN);	// Eingang, Abfragen von VCC von Master
     //TWI_PORT |= (1<<VCCPIN);	// HI
     
