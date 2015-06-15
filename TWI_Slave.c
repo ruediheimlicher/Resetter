@@ -10,17 +10,13 @@
 
 #include <avr/io.h>
 #include <avr/delay.h>
-//#include <avr/interrupt.h>
+#include <avr/interrupt.h>
 //#include <avr/pgmspace.h>
 //#include <avr/sleep.h>
 //#include <avr/eeprom.h>
 #include <inttypes.h>
 #include <avr/wdt.h>
 
-//#include "twislave.c"
-//#include "lcd.c"
-
-//#include "adc.c"
 
 //***********************************
 //Reset							*
@@ -35,13 +31,16 @@
 #define LOOPLEDPIN            0        // Blink-LED
 //#define VCCPIN              1
 
-#define SDAPIN                3        // Eingang von SDA/I2C
-#define OSZIPIN               1
+#define SDAPIN                1        // Eingang von SDA/I2C
+#define OSZIPIN               3
+#define REPORTPIN              3       // Wie OSZI. Meldet Reset an Webserver, active LO
+
 #define WEBSERVERPIN				2			// Eingang von WebServer
-#define RESETCOUNT            0x0200   // Fehlercounter: Zeit bis Reset ausgeloest wird
-#define RESETDELAY            0x0200   // Waitcounter: Blockiert wiedereinschalten 
-#define WEBSERVERRESETDELAY   0x0800
+#define RESETCOUNT            0x200   // Fehlercounter: Zeit bis Reset ausgeloest wird
+#define RESETDELAY            0x08   // Waitcounter: Blockiert wiedereinschalten
+#define WEBSERVERRESETDELAY   0x010
 #define WAIT                  0
+#define CHECK                 1 // in ISR gesetzt, resetcount soll erhoeht werden
 
 void delay_ms(unsigned int ms);
 
@@ -105,20 +104,27 @@ void timer_init(void)
 	/* Set timer to CTC mode */
 	//TCCR0A = (1 << WGM01);
 	/* Set prescaler to 8 */
-	TCCR0B = (1 << CS00)|(1 << CS02);
+	TCCR0B = (1 << CS00)|(1 << CS02); // clock/1024
 	/* Set output compare register for 1ms ticks */
 	//OCR0A = (F_CPU / 8) / 1000;
 	/* Enable output compare A interrupts */
-	TIMSK0 = (1 << TOIE0);
+	TIMSK0 = (1 << TOIE0); // TOV0 Overflow
 }
 
-/* Interrupt Service Routine for compare match A interrupts */
-ISR(TIM0_COMPA_vect)
+ISR(TIM0_OVF_vect)
 {
-
-
+   
+   statusflag |= (1<<CHECK);
 }
 
+ISR(INT0_vect)
+{
+   if ((!(statusflag & (1<<WAIT))))// WAIT verhindert, dass Relais von SDA_HI nicht sofort wieder zurueckgesetzt wird
+   {
+   resetcount=0;
+   }
+   
+}
 
 void main (void) 
 {
@@ -129,10 +135,11 @@ void main (void)
 	WDTCR |= (1<<WDCE) | (1<<WDE);
 	WDTCR = 0x00;
 	slaveinit();
-	/* initialize the LCD */
-	
-    
-    
+   MCUCR |= (1<<ISC00);
+   GIMSK |= (1<<INT0);
+   timer_init();
+   sei();
+   
 	//Zaehler fuer Zeit von (SDA || SCL = LO)
 	//uint16_t twi_LO_count0=0;
 	//uint16_t twi_LO_count1=0;
@@ -145,52 +152,59 @@ void main (void)
 	
 #pragma mark while
 	while (1)
-	{	
-		//wdt_reset();
-		//Blinkanzeige
-		loopcount0++;
-		if (loopcount0>=0x00AF)
-		{
-			//lcd_gotoxy(0, 0);
-			//lcd_putint(loopcount1);
-			loopcount0=0;
-			
-			loopcount1++;
+   {
+      //wdt_reset();
+      //Blinkanzeige
+      loopcount0++;
+      if (loopcount0>=0x00AF)
+      {
+         //lcd_gotoxy(0, 0);
+         //lcd_putint(loopcount1);
+         loopcount0=0;
          
-         /*
-          WEBSERVERPIN 
-          */
-         
-			if (TWI_PIN & (1<<SDAPIN) &&  (!(statusflag & (1<<WAIT)))) // alles OK. SDA ist HI,  WAIT ist nicht gesetzt
-			{
-				resetcount=0;                    // resetcounter zuruecksetzen
-				TWI_PORT &= ~(1<<RESETPIN);
+         loopcount1++;
+         if (loopcount1 >0x8F)
+         {
+            TWI_PORT ^=(1<<LOOPLEDPIN);
+            loopcount1=0;
+            //           TWI_PORT ^= (1<<RESETPIN);
             
          }
-			else 
-			{
-				resetcount++;                    // resetcounter inkrement
-				if (resetcount > RESETCOUNT)     // Zeit erreicht
-				{
-               //TWI_PORT |=(0<<OSZIPIN);
-					TWI_PORT |= (1<<RESETPIN);    // Resetpin Hi, Relais schaltet Bus aus
-					statusflag |= (1<<WAIT);      // WAIT ist gesetzt, Relais wird von SDA_HI nicht sofort wieder zurueckgesetzt
-				}
+
+      }
+      /*
+       SDAPIN (INT0)
+       */
+      if (statusflag & (1<<CHECK))
+      {
+        /// TWI_PORT ^=(1<<OSZIPIN);
+         statusflag &= ~(1<<CHECK);
+         {
             
-				if (resetcount > (RESETCOUNT + RESETDELAY))
-				{
-               //TWI_PORT |=(1<<OSZIPIN);
+            resetcount++;                    // resetcounter inkrement
+            if (resetcount > RESETCOUNT)     // Zeit erreicht
+            {
+               TWI_PORT &= ~(1<<REPORTPIN); // Meldung an Webserver
+               //TWI_PORT |=(0<<OSZIPIN);
                
-					TWI_PORT &= ~(1<<RESETPIN);   // Relais faellt ab
-					statusflag &= ~(1<<WAIT);     // WAIT zurueckgesetzt, SDA_HI ist wieder wirksam
-					resetcount =0;
-               
+               TWI_PORT |= (1<<RESETPIN);    // Resetpin Hi, Relais schaltet Bus aus
+               statusflag |= (1<<WAIT);      // WAIT ist gesetzt, Relais wird von SDA_HI nicht sofort wieder zurueckgesetzt
             }
             
-			}
+            if (resetcount > (RESETCOUNT + RESETDELAY))
+            {
+               //TWI_PORT &= ~(1<<OSZIPIN);
+               TWI_PORT |=(0<<REPORTPIN); // Meldung an Webserver zuruecksetzen
+               TWI_PORT &= ~(1<<RESETPIN);   // Relais faellt ab
+               statusflag &= ~(1<<WAIT);     // WAIT zurueckgesetzt, SDA_HI ist wieder wirksam
+               resetcount =0;
+               webserverresetcount =0;
+            }
+            
+         }
          
+       
          
-			
          // WEBSERVERPIN abfragen: Reset wenn LO
          
          if (TWI_PIN & (1 << WEBSERVERPIN))
@@ -199,43 +213,39 @@ void main (void)
             webserverresetcount =0;
             delaycount=0;
             statusflag &= ~(1<<WAIT);
-            TWI_PORT &= ~(1<<RESETPIN);
+            //           TWI_PORT &= ~(1<<RESETPIN);
          }
          else // webserverreset inc, reset wenn Eingang vom Webserver lange genug LO ist: Fehlerfall auf Webserver
          {
             webserverresetcount++;
+            TWI_PORT ^=(1<<OSZIPIN);
             if (webserverresetcount > WEBSERVERRESETDELAY)
             {
                TWI_PORT |= (1<<RESETPIN);    // Resetpin Hi, Relais schaltet aus
-					statusflag |= (1<<WAIT);      // WAIT ist gesetzt, Relais wird von SDA_HI nicht zurueckgesetzt
+               statusflag |= (1<<WAIT);      // WAIT ist gesetzt, Relais wird von SDA_HI nicht zurueckgesetzt
                
             }
             
-            if (resetcount > (WEBSERVERRESETDELAY + RESETDELAY))
+            if (webserverresetcount > (WEBSERVERRESETDELAY + RESETDELAY))
             {
                //TWI_PORT |=(1<<OSZIPIN);
                TWI_PORT &= ~(1<<RESETPIN);
                statusflag &= ~(1<<WAIT);// WAIT zurueckgesetzt, SDA_HI ist wieder wirksam
                webserverresetcount =0;
-               
+               resetcount =0;
             }
             
          }
          
+        
          
-			if (loopcount1 >0x8F)
-			{
-				TWI_PORT ^=(1<<LOOPLEDPIN);
-				loopcount1=0;
-			}
-			
-		}
-		
-		//delaycount
+      }
+      
+      //delaycount
       
       
-		
-	}//while
+      
+   }//while
     
     
     //return 0;
