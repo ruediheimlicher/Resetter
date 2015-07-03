@@ -45,6 +45,12 @@
 #define WAIT                  0
 #define CHECK                 1 // in ISR gesetzt, resetcount soll erhoeht werden
 
+#define SDA_LO_RESET          2 // gesetzt, wenn SDA zulange LO ist
+#define SDA_HI_RESET          3 // gesetzt, wenn SDA zulange HI ist
+
+#define SDA_LO_MAX            0x8000
+#define SDA_HI_MAX            0xFFFF
+
 void delay_ms(unsigned int ms);
 
 volatile uint16_t	loopcount0=0;
@@ -58,6 +64,10 @@ volatile uint16_t	webserverresetcount=0; // Zeit, die der Resetrequest vom Webse
 volatile uint8_t statusflag=0;
 
 volatile uint16_t	overflowcount=0;
+
+volatile uint16_t	SDA_LO_counter=0;
+volatile uint16_t	SDA_HI_counter=0;
+
 
 void slaveinit(void)
 {
@@ -102,11 +112,11 @@ void delay_ms(unsigned int ms)/* delay for a minimum of <ms> */
 }
 
 /* Initializes the hardware timer  */
-void timer_init(void)
+void timer0_init(void)
 {
 	/* Set timer to CTC mode */
 	//TCCR0A = (1 << WGM01);
-	/* Set prescaler to 8 */
+	/* Set prescaler */
 	TCCR0B = (1 << CS00)|(1 << CS02); // clock/1024
 	/* Set output compare register for 1ms ticks */
 	//OCR0A = (F_CPU / 8) / 1000;
@@ -117,14 +127,20 @@ void timer_init(void)
 ISR(TIM0_OVF_vect) // Aenderung an SDA
 {
    statusflag |= (1<<CHECK);
+
+
 }
 
 
-ISR(INT0_vect)
+
+ISR(INT0_vect) // Potential-Aenderung von SDA
 {
    if ((!(statusflag & (1<<WAIT))))// WAIT verhindert, dass Relais von SDA_HI nicht sofort wieder zurueckgesetzt wird
    {
-   resetcount=0;
+      // counter zuruecksetzen, alles OK
+      resetcount=0;
+      SDA_HI_counter=0;
+      SDA_LO_counter=0;
    }
    
 }
@@ -167,7 +183,8 @@ void main (void)
 	slaveinit();
    MCUCR |= (1<<ISC00);
    GIMSK |= (1<<INT0);
-   timer_init();
+   timer0_init();
+   timer1_init();
    sei();
    
 	//Zaehler fuer Zeit von (SDA || SCL = LO)
@@ -205,15 +222,34 @@ void main (void)
       /*
        Checken, ob SDA zu lange auf gleichem Wert blieb
        */
+      
+      // impulsdauer von SDA checken
+      if (PINB & (1<<SDAPIN)) // HI, darf lange dauern
+      {
+         SDA_HI_counter++;
+         
+      }
+      else // LO
+      {
+         SDA_LO_counter++;
+         if (SDA_LO_counter >= SDA_LO_MAX)
+         {
+            statusflag |= (1<<SDA_LO_RESET);
+         }
+      }
+      
+      
+
       if (statusflag & (1<<CHECK))// Timer gibt Takt der Anfrage an
       {
+         
          /// TWI_PORT ^=(1<<OSZIPIN);
          statusflag &= ~(1<<CHECK);
          {
             // resetcount wird bei Aenderungen am SDA  in ISR von INT0 zurueckgesetzt. (Normalbetrieb)
             
             resetcount++;                    // resetcounter inkrement
-            if (resetcount > RESETCOUNT)     // Zeit erreicht
+            if ((resetcount > RESETCOUNT)&& (statusflag & (1<<SDA_LO_RESET)) )     // Zeit erreicht
             {
                TWI_PORT &= ~(1<<REPORTPIN); // Meldung an Webserver LO
                //TWI_PORT |=(0<<OSZIPIN);
