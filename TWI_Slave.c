@@ -112,7 +112,7 @@ void delay_ms(unsigned int ms)/* delay for a minimum of <ms> */
 }
 
 /* Initializes the hardware timer  */
-void timer0_init(void)
+void timer_init(void)
 {
 	/* Set timer to CTC mode */
 	//TCCR0A = (1 << WGM01);
@@ -183,8 +183,8 @@ void main (void)
 	slaveinit();
    MCUCR |= (1<<ISC00);
    GIMSK |= (1<<INT0);
-   timer0_init();
-   timer1_init();
+   timer_init();
+ //  timer1_init();
    sei();
    
 	//Zaehler fuer Zeit von (SDA || SCL = LO)
@@ -245,30 +245,38 @@ void main (void)
          
          /// TWI_PORT ^=(1<<OSZIPIN);
          statusflag &= ~(1<<CHECK);
+         // resetcount wird bei Aenderungen am SDA  in ISR von INT0 zurueckgesetzt. (Normalbetrieb)
+         
+         
+         if ((resetcount > RESETCOUNT)  || (statusflag & (1<<SDA_LO_RESET)))     // Zeit erreicht, VON SDA LO ODER SDA HI
          {
-            // resetcount wird bei Aenderungen am SDA  in ISR von INT0 zurueckgesetzt. (Normalbetrieb)
+            TWI_PORT &= ~(1<<REPORTPIN); // Meldung an Webserver LO
+            //TWI_PORT |=(0<<OSZIPIN);
             
-            resetcount++;                    // resetcounter inkrement
-            if ((resetcount > RESETCOUNT)&& (statusflag & (1<<SDA_LO_RESET)) )     // Zeit erreicht
+            TWI_PORT |= (1<<RELAISPIN);    // RELAISPIN Hi, Relais schaltet Bus aus
+            statusflag |= (1<<WAIT);      // WAIT ist gesetzt, Relais wird von SDA_HI nicht sofort wieder zurueckgesetzt
+            delaycount = 0;
+         }
+         
+         
+         
+         
+         if (statusflag |= (1<<WAIT))
+         {
+            delaycount++; // Counter fuer Dauer Relais_on
+            
+            if (delaycount > RESETDELAY)
             {
-               TWI_PORT &= ~(1<<REPORTPIN); // Meldung an Webserver LO
-               //TWI_PORT |=(0<<OSZIPIN);
                
-               TWI_PORT |= (1<<RELAISPIN);    // RELAISPIN Hi, Relais schaltet Bus aus
-               statusflag |= (1<<WAIT);      // WAIT ist gesetzt, Relais wird von SDA_HI nicht sofort wieder zurueckgesetzt
-            }
-            
-            if (resetcount > (RESETCOUNT + RESETDELAY))
-            {
-               //TWI_PORT &= ~(1<<OSZIPIN);
-               TWI_PORT |=(0<<REPORTPIN); // Meldung an Webserver zuruecksetzen
-               TWI_PORT &= ~(1<<RELAISPIN);   // Relais faellt ab
-               statusflag &= ~(1<<WAIT);     // WAIT zurueckgesetzt, SDA_HI ist wieder wirksam
-               resetcount =0;
-               webserverresetcount =0;
             }
             
          }
+         else
+         {
+            // resetcounter inkrement
+            resetcount++;
+         }
+         
          
          
          
