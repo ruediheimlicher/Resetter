@@ -128,7 +128,7 @@ ISR(TIM0_OVF_vect) // Aenderung an SDA
 {
    statusflag |= (1<<CHECK);
 
-
+   
 }
 
 
