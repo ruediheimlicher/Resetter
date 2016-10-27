@@ -29,6 +29,8 @@
 
 
 #define LOOPLEDPIN            0        // Blink-LED
+#define LONGBLINK             0x8F
+#define SHORTBLINK            0x2F
 
 #define SDAPIN                1        // Eingang von SDA/I2C
 #define WEBSERVERPIN				2			// Eingang vom WebServer
@@ -40,7 +42,7 @@
 
 
 #define RESETCOUNT            0x200   // Fehlercounter: Zeit bis Reset ausgeloest wird
-#define RESETDELAY            0x08   // Waitcounter: Blockiert wiedereinschalten
+#define RESETDELAY            0x0F   // Waitcounter: Blockiert wiedereinschalten
 #define WEBSERVERRESETDELAY   0x010
 #define WAIT                  0
 #define CHECK                 1 // in ISR gesetzt, resetcount soll erhoeht werden
@@ -49,12 +51,13 @@
 #define SDA_HI_RESET          3 // gesetzt, wenn SDA zulange HI ist
 
 #define SDA_LO_MAX            0x8000
-#define SDA_HI_MAX            0xFFFF
+#define SDA_HI_MAX            0xFFFA
 
 void delay_ms(unsigned int ms);
 
 volatile uint16_t	loopcount0=0;
 volatile uint16_t	loopcount1=0;
+volatile uint16_t	blinkintervall = LONGBLINK;
 
 volatile uint16_t	resetcount=0;
 volatile uint16_t	delaycount=0; // Zaehlt wenn WAIT gesetzt ist: Delay fuer Relais
@@ -124,7 +127,7 @@ void timer_init(void)
 	TIMSK0 = (1 << TOIE0); // TOV0 Overflow
 }
 
-ISR(TIM0_OVF_vect) // Aenderung an SDA
+ISR(TIM0_OVF_vect) // Aenderung an SDA checken
 {
    statusflag |= (1<<CHECK);
 
@@ -210,7 +213,7 @@ void main (void)
          loopcount0=0;
          
          loopcount1++;
-         if (loopcount1 >0x8F)
+         if (loopcount1 >blinkintervall)
          {
             TWI_PORT ^=(1<<LOOPLEDPIN);
             loopcount1=0;
@@ -221,6 +224,7 @@ void main (void)
       }
       /*
        Checken, ob SDA zu lange auf gleichem Wert blieb
+       - resetcount wird bei Aenderungen am SDA  in der ISR von INT0 zurueckgesetzt. (Normalbetrieb)
        */
       
       // impulsdauer von SDA checken
@@ -228,6 +232,11 @@ void main (void)
       {
          SDA_HI_counter++;
          
+         if (SDA_HI_counter >= SDA_HI_MAX) // Fehler, sehr lange Dauer
+         {
+            statusflag |= (1<<SDA_HI_RESET);
+         }
+
       }
       else // LO
       {
@@ -248,7 +257,7 @@ void main (void)
          // resetcount wird bei Aenderungen am SDA  in ISR von INT0 zurueckgesetzt. (Normalbetrieb)
          
          
-         if ((resetcount > RESETCOUNT)  || (statusflag & (1<<SDA_LO_RESET)))     // Zeit erreicht, VON SDA LO ODER SDA HI
+         if ((resetcount > RESETCOUNT)  || (statusflag & (1<<SDA_LO_RESET)) || (statusflag & (1<<SDA_HI_RESET)))     // Reset-Zeit erreicht, oder infolge zu langer Dauer von  SDA LO ODER SDA HI
          {
             TWI_PORT &= ~(1<<REPORTPIN); // Meldung an Webserver LO
             //TWI_PORT |=(0<<OSZIPIN);
@@ -256,12 +265,21 @@ void main (void)
             TWI_PORT |= (1<<RELAISPIN);    // RELAISPIN Hi, Relais schaltet Bus aus
             statusflag |= (1<<WAIT);      // WAIT ist gesetzt, Relais wird von SDA_HI nicht sofort wieder zurueckgesetzt
             delaycount = 0;
+            blinkintervall = SHORTBLINK;
          }
          
+         if (resetcount > (RESETCOUNT + RESETDELAY)) // Dauer des Reset-Impulses
+         {
+            //TWI_PORT |=(1<<OSZIPIN);
+            TWI_PORT &= ~(1<<RELAISPIN);
+            statusflag &= ~(1<<WAIT);// WAIT zurueckgesetzt, SDA_HI ist wieder wirksam
+            resetcount =0;
+            blinkintervall = LONGBLINK;
+         }
+
          
          
-         
-         if (statusflag |= (1<<WAIT))
+         if (statusflag |= (1<<WAIT)) // Reset halten, solange WAIT dauert
          {
             delaycount++; // Counter fuer Dauer Relais_on
             
@@ -273,7 +291,7 @@ void main (void)
          }
          else
          {
-            // resetcounter inkrement
+            // resetcounter inkrement, sicher ist sicher
             resetcount++;
          }
          
