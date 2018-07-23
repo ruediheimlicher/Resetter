@@ -1,0 +1,5 @@
+TWI_Reset
+
+
+
+avr-size -C --mcu=attiny85 TWI_Slave.elf

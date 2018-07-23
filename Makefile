@@ -40,7 +40,7 @@
 
 
 # MCU name
-MCU = attiny13
+MCU = attiny85
 
 
 # Processor frequency.
