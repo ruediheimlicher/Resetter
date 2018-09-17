@@ -80,6 +80,7 @@ volatile uint16_t	overflowcount=0;
 volatile uint16_t	SDA_LO_counter=0;
 volatile uint16_t	SDA_HI_counter=0;
 
+volatile char ii=0;
 
 void slaveinit(void)
 {
@@ -114,6 +115,26 @@ void slaveinit(void)
    
 }
 
+void WDT_Init(void)
+{
+   cli();
+   wdt_reset();
+   WDTCR = (1<<WDCE) | (1<<WDE);
+   WDTCR = (1<<WDIE) | (1<<WDE) | (1<<WDP3) | (1<<WDP0);
+   sei();
+}
+
+
+ISR(WDT_vect)
+{
+   ii++;
+   if (ii >= 2)
+   { 
+      ii = 0;
+      PORTB ^= (1<<PB0);
+   }
+   WDT_Init();
+}
 
 
 /* Initializes the hardware timer  */
@@ -154,19 +175,21 @@ int main (void)
 {
    
    wdt_disable();
-   MCUSR &= ~(1<<WDRF);
-   wdt_reset();
+   MCUSR &= ~(1<<WDRF);// Just to be safe since we can not clear WDE if WDRF is set
+   
+   cli();
+   WDTCR &= ~(1<<WDE);
    WDTCR |= (1<<WDCE) | (1<<WDE);
-   WDTCR = 0x00;
+   wdt_enable(WDTO_4S);
+   WDTCR |=  (1<< WDIE); // Watchdog macht nur reset
    slaveinit();
    MCUCR |= (1<<ISC00);
    //   GIMSK |= (1<<INT0);
    timer_init();
-   //  timer1_init();
    sei();
-   _delay_ms(1000);
+   _delay_ms(100);
    TWI_PORT |= (1<<REPORTPIN);
-   wdt_enable(WDTO_4S);
+  
 #pragma mark while
    while (1)
    {
